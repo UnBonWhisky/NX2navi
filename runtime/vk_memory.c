@@ -1066,10 +1066,32 @@ static uint64_t budget_cap(void) {
 static VkBuffer ballast_buf[BALLAST_MAX];
 static VmaAllocation ballast_alloc[BALLAST_MAX];
 static int nballast;
+// NX2NAVI_VRAM_EMULATE_MB (test; 0: off): the run behaves as on a card whose device-local budget is that many MiB. The
+// ballast is sized at start to the driver's budget less that figure, so the driver reaches its limit (and moves memory
+// to system RAM) where such a card would, and vram_query takes the ballast out of the use and the budget it reports,
+// so every decision that reads them (texture detail auto, the memory levels, the evictions) sees the smaller card. A
+// 6 GiB laptop card has a budget of about 4.7 to 5.5 GiB (vk_texture.c "texture detail"). emulate_bytes is the
+// ballast actually held while the test is on, 0 otherwise.
+static uint64_t emulate_bytes;
 
 void vk_mem_ballast(VmaAllocator vma) {   // vk_device.c, right after the allocator is made (before vk_ctx answers)
     const char *s = cfg_get("NX2NAVI_VRAM_BALLAST_MB");
     uint64_t want = s && *s && atoll(s) > 0 ? (uint64_t)atoll(s) << 20 : 0, got = 0;
+    int emulate = cfg_int("NX2NAVI_VRAM_EMULATE_MB");
+    if (emulate > 0) {
+        VmaBudget vb[VK_MAX_MEMORY_HEAPS];
+        vmaGetHeapBudgets(vma, vb);
+        const VkPhysicalDeviceMemoryProperties *mp;
+        vmaGetMemoryProperties(vma, &mp);
+        uint64_t budget = 0, used = 0;
+        for (uint32_t h = 0; h < mp->memoryHeapCount && h < VK_MAX_MEMORY_HEAPS; h++)
+            if (mp->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) budget += vb[h].budget, used += vb[h].usage;
+        uint64_t keep = (uint64_t)emulate << 20;
+        want = budget > keep + used ? budget - keep - used : 0;
+        rt_log("mem: emulating a card with a video memory budget of %d MiB (NX2NAVI_VRAM_EMULATE_MB, a test): the "
+               "driver's budget is %llu MiB with %llu MiB in use, so %llu MiB are taken as ballast", emulate,
+               (unsigned long long)(budget >> 20), (unsigned long long)(used >> 20), (unsigned long long)(want >> 20));
+    }
     if (!want) return;
     while (got < want && nballast < BALLAST_MAX) {
         VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -1081,13 +1103,22 @@ void vk_mem_ballast(VmaAllocator vma) {   // vk_device.c, right after the alloca
         if (vmaCreateBuffer(vma, &bi, &ai, &ballast_buf[nballast], &ballast_alloc[nballast], NULL) != VK_SUCCESS) break;
         got += bi.size, nballast++;
     }
+    if (emulate > 0) emulate_bytes = got;
     rt_log("mem: %llu of %llu MiB of video memory taken and held for the session (NX2NAVI_VRAM_BALLAST_MB, a test)",
            (unsigned long long)(got >> 20), (unsigned long long)(want >> 20));
 }
 
 void vk_mem_ballast_release(VmaAllocator vma) {   // before the allocator goes
     for (int i = 0; i < nballast; i++) vmaDestroyBuffer(vma, ballast_buf[i], ballast_alloc[i]);
-    nballast = 0;
+    nballast = 0, emulate_bytes = 0;
+}
+
+// The use and the budget without the ballast of NX2NAVI_VRAM_EMULATE_MB: what the emulated card would report.
+static void emulate_adjust(uint64_t *used, uint64_t *budget) {
+    uint64_t e = emulate_bytes;
+    if (!e) return;
+    *used = *used > e ? *used - e : 0;
+    *budget = *budget > e ? *budget - e : 0;
 }
 
 static int vram_query(uint64_t *used, uint64_t *budget, int *exact) {
@@ -1103,6 +1134,7 @@ static int vram_query(uint64_t *used, uint64_t *budget, int *exact) {
             if (p2.memoryProperties.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
                 *used += b.heapUsage[h], *budget += b.heapBudget[h];
         *exact = 1;
+        emulate_adjust(used, budget);
         return *budget != 0;
     }
     VmaBudget vb[VK_MAX_MEMORY_HEAPS];
@@ -1110,6 +1142,7 @@ static int vram_query(uint64_t *used, uint64_t *budget, int *exact) {
     for (uint32_t h = 0; h < mp->memoryHeapCount && h < VK_MAX_MEMORY_HEAPS; h++)
         if (mp->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
             *used += vb[h].statistics.blockBytes, *budget += mp->memoryHeaps[h].size;
+    emulate_adjust(used, budget);
     return *budget != 0;
 }
 

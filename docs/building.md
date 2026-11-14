@@ -30,6 +30,22 @@ vulkan-memory-allocator,vulkan-validation-layers,shaderc,spirv-tools} base-devel
 
 `ffmpeg` from MSYS2 is a GPLv3 build and is never linked; the movies go through libvpx.
 
+A profile-guided build also needs `mingw-w64-ucrt-x86_64-compiler-rt` and `mingw-w64-ucrt-x86_64-llvm-tools` ("Profile-guided
+build" below).
+
+MSYS2 on another drive, without the installer and without administrator rights: unpack the base archive
+(`msys2-base-x86_64-<date>.sfx.exe -y -oE:\` from repo.msys2.org/distrib, checked against the sha256 of its GitHub
+release), point `C:\msys64` at it with a junction (`mklink /J C:\msys64 E:\msys64`, no rights needed; the build scripts
+look in `C:\msys64\ucrt64\bin`), then run the two `pacman -Syuu` passes and the line above from
+`E:\msys64\usr\bin\bash.exe -lc` with `MSYSTEM=UCRT64`. The packages above take about 2.1 GB. uv puts its cache and
+the Python it downloads where `UV_CACHE_DIR` and `UV_PYTHON_INSTALL_DIR` say, and `NUGET_PACKAGES` moves the .NET
+packages of `tools/build_xlate.py`.
+
+`tools/build_xlate.py` restores its packages from nuget.org. A user NuGet configuration that lists no package source
+(an empty `packageSources` in `%APPDATA%\NuGet\NuGet.Config`) fails the restore with NU1100 for every package; either
+add the source (`dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org`) or put a `nuget.config`
+naming it into `build\xlate\`, which the restore reads and git ignores.
+
 PATH:
 
 - Add `C:\Program Files (x86)\Microsoft Visual Studio\Installer` to the user PATH: NativeAOT needs `vswhere.exe`, or

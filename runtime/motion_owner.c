@@ -46,9 +46,13 @@ static int read_at(uint64_t a, void *out, size_t n) {
     if (!a || a > UINT64_MAX - n) return 0;
     mem_kernel_access(a, n);
     if (!mem_read_hold(a, n)) return 0;
-    memcpy(out, (const void *)(uintptr_t)a, n);
+    // The pointers followed here are read while the game changes area, and a stale one can name a page the region map
+    // calls readable that is not committed: a plain copy faulted there in player_actor (an access violation at
+    // 0x34ad000d1e on entering Kakariko with DLSS on, crash_veh). plat_mem_read answers 0 instead, and the walk fails
+    // closed as it does for any other bad link.
+    int ok = plat_mem_read(a, out, n);
     mem_read_release();
-    return 1;
+    return ok;
 }
 static uint64_t ptr(uint64_t a) {
     uint64_t p = 0;

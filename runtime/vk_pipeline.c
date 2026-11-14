@@ -8169,6 +8169,23 @@ static int prep_sample_warm(int *fast, int *got) {
     return *got >= LW_SAMPLE / 2 && lw_warm_sample(*fast, *got);
 }
 
+// After a preparation or a --warm-shaders run that left the driver's cache holding the prepared list: shader-warm.txt
+// says "done" for this GPU and driver, so the next start samples the cache (lw_check) instead of going on with a warm
+// an earlier run left at "warming". Without this a run cut short while it warmed (a test run, a closed window) left
+// "warming ... 0", and every later start built all 42,239 variants again on idle threads during play although the
+// build had just warmed the cache: on a Ryzen 7 5800X that held a walk through Hyrule Field at 30 to 40 fps with
+// "bound: cpu" and 20 to 90 background pipeline creates a second.
+static void warm_stamp_done(const char *dir) {
+    VkCtx *c = vk_ctx();
+    if (!c) return;
+    VkPhysicalDeviceProperties pp;
+    vkGetPhysicalDeviceProperties(c->phys, &pp);
+    char path[PLAT_PATH_MAX * 2 + 32], line[160];
+    snprintf(path, sizeof path, "%s/shader-warm.txt", dir);
+    int n = snprintf(line, sizeof line, "done %04x:%04x:%08x 0 0\n", pp.vendorID, pp.deviceID, pp.driverVersion);
+    if (!plat_file_write_atomic(path, line, (size_t)n)) rt_log("vk_pipeline: cannot write %s", path);
+}
+
 // Preparation: every variant of <dir>/shader-prepared.bin on every core at normal priority. sample: --warm-shaders
 // after an update, which first asks the driver's cache (prep_sample_warm) and builds nothing more when it has them.
 // It took 10 to 20 s on a player's PC at every update, all of it 42,000 libraries the driver gave back at once, and
@@ -8201,6 +8218,7 @@ static void lb_warm_prepared(const char *dir, int sample) {
                now_ms() - LB.t0);
         fflush(stdout);
         free(LB.e), LB.e = NULL, LB.n = 0, LB.next = 0, LB.done = 0, LB.skipped = 0;
+        warm_stamp_done(dir);
         return;
     }
     if (sample && got)
@@ -8225,6 +8243,7 @@ static void lb_warm_prepared(const char *dir, int sample) {
     fflush(stdout);
     if (SK.journal) plat_file_close(SK.journal), SK.journal = NULL, plat_file_delete(jp);   // every build returned
     lb_report("preparation done");
+    if (P.gpl) warm_stamp_done(dir);
     // with gpl off only compute variants are built: say so, rather than count the skipped ones as built
     unsigned long long skipped = LB.skipped;
     size_t tried = n - (size_t)skipped;
