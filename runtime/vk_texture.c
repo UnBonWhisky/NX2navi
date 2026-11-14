@@ -1106,12 +1106,17 @@ static int astc_opaque(const tex_t *t, uint64_t addr, const TexVkFormat *f) {
 // the layer count alone, which no level changes, and does not count (reflect_exact).
 //
 // auto: full from DETAIL_FULL_MB of device-local budget on, low under DETAIL_LOW_MB, reduced between. Textures give
-// way from 80% of the budget on (sweep_pressure), so a level wants its use at or under that: full, 6.9 to 7.5 GiB in
-// the town and in Hyrule Field, on cards of 10 GiB and more (their budgets start near 9 GiB; an 8 GiB card's is about
-// 7.2 GiB); reduced, 5.5 GiB, on 8 GiB cards; and every 6 GiB card, whose budget stays under 5.5 GiB, gets low.
+// way from 80% of the budget on (sweep_pressure), so a level wants its use at or under that: full on cards of 16 GiB
+// and more; reduced, 5.5 GiB in the town, on 8 and 12 GiB cards; and every 6 GiB card, whose budget stays under
+// 5.5 GiB, gets low. Full began at 8 GiB of budget before, which gave it to 12 GiB cards; on an RTX 4070 (budget 10.0
+// to 11.4 GiB) a 13-minute walk through Hyrule Field, Kakariko and the Bottom of the Well, Kokiri Forest, the Market
+// and Hyrule Castle at the default settings peaked at 11.5 GiB in use against a 10.2 GiB budget: the driver moved
+// memory to system RAM and Hyrule Field had 552 frames held 90 ms on average at a fence (292 frames over 100 ms in
+// the run, the worst minute's 1% low 7 fps). With reduced the peak was 9.0 GiB, the field had 26 such hitches (12
+// frames over 100 ms in the run, worst 1% low 24 fps) at the same mean frame rate (44.5 against 45.4 fps).
 #define DETAIL_MIN 256
 #define DETAIL_LOW_MIN 1024
-#define DETAIL_FULL_MB 8192
+#define DETAIL_FULL_MB 12288
 #define DETAIL_LOW_MB 6144
 // The levels above assume the ASTC textures end as BC3 (or stay ASTC), a byte a texel. Where they stay RGBA8 (astc =
 // cpu, a card without the decoder, astc_bc = 0) they take four times that, which is what one level left out gives
