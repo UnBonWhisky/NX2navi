@@ -409,7 +409,7 @@ WAIT_TIMEOUT = 0x102
 _k32 = None
 
 
-def _kernel32():
+def _kernel32_proc():
     global _k32
     if _k32:
         return _k32
@@ -437,7 +437,7 @@ class GameCopy:
 
     def poll(self):
         if self.handle:
-            k = _kernel32()
+            k = _kernel32_proc()
             if k.WaitForSingleObject(self.handle, 0) == WAIT_TIMEOUT:
                 return None
             code = ctypes.c_ulong()
@@ -457,7 +457,7 @@ def game_copy(exe, skip=None):
     if os.name != 'nt':
         return None
     try:
-        k = _kernel32()
+        k = _kernel32_proc()
         n = 1024
         while True:
             pids, got = (ctypes.c_ulong * n)(), ctypes.c_ulong()

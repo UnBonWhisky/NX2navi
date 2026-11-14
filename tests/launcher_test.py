@@ -6107,7 +6107,7 @@ def register(api):
                      'mod_game_dir', 'mod_log', 'play_gave_up'):
             setattr(a, name, getattr(App, name).__get__(a))
         a.mods_page, a.mods_message, a.plugin_problems, a.mod_apis, a.mod_stack = 0, '', {}, [], []
-        a.game_proc = a.play_extra = None
+        a.game_run = a.play_extra = None
         a.mods_failed = []
         a.screen = 'mods'
         return App, a
