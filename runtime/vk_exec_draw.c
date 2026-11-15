@@ -7302,6 +7302,7 @@ static void untranslated_dispatch_fallback(VkExec *ex) {
     static int logged;
     if (!logged++) rt_log("vk_exec: untranslated compute dispatch: its output image (%ux%u) gets a linear blit of its "
                           "largest input (%ux%u) instead (NX2NAVI_CS_FALLBACK=0 turns this off)", dw, dh, sw, sh);
+    if (dst_view) vk_exec_tail_standin(ex);   // the scene upscaler's place: the frame's tail from here (NX2NAVI_TAIL_ALL)
     vk_exec_pass_end(ex);
     vk_exec_barrier(ex);
     VkImageBlit bl = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}};
@@ -7519,8 +7520,10 @@ static void op_update_ub(VkExec *ex, const p_update_ub *u) {
     // results the game reads, from the bytes here, and takes no write-back: one after the tail would land when the
     // game is already writing the next frame's data. Not with the lazy write-back, where the block's pages may be
     // armed and a store into them would wait for the GPU (memory.c lazy_fault): the update is noted as ever there,
-    // and the tail goes after the write-backs as before.
-    if (vk_exec_tail() && !vk_mem_wb_lazy() && vk_mem_mirrored(u->dst, u->size))
+    // and the tail goes after the write-backs as before. With NX2NAVI_TAIL_ALL a block none of whose pages may be armed
+    // takes the tail's way with the lazy write-back too (vk_exec.c "the early tail").
+    if (vk_exec_tail() && vk_mem_mirrored(u->dst, u->size) &&
+        (!vk_mem_wb_lazy() || (vk_exec_tail_all() && !mem_lazy_touches(u->dst, u->size))))
         vk_exec_tail_ub(ex->fence, u->dst, u->data, u->size);
     else vk_mem_gpu_wrote(&sp, u->size);
     vk_usnap_drop(u->dst, u->size);

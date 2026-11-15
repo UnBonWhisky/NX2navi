@@ -83,6 +83,12 @@ int vk_exec_take_results(void) { return __atomic_exchange_n(&ex_results, 0, __AT
 typedef struct { uint64_t addr; uint32_t size; uint8_t data[]; } UbWrite;
 static void ub_write_cb(void *arg) {
     UbWrite *w = arg;
+    // NX2NAVI_TAIL_ALL: a page the lazy write-back armed since the update was recorded comes back first, with what the
+    // mirror holds when the GPU wrote there meanwhile (memory.c mem_lazy_release), so the store neither faults nor is lost
+    if (mem_lazy_touches(w->addr, w->size)) {
+        const uint64_t rg[1][3] = {{w->addr, w->addr + w->size, 0}};
+        mem_lazy_release(rg, 1);
+    }
     memcpy((void *)(uintptr_t)w->addr, w->data, w->size);
     free(w);
 }

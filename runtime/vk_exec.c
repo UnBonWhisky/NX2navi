@@ -1172,6 +1172,16 @@ static uint64_t n_parts, n_subs, n_idle_parts, n_pass_splits, n_cuts;
 // (NVIDIA's and Intel's default), where a tail's uniform updates are noted as writes and no tail goes early.
 // Not with shadow storage, emulated mesh shaders, the mesh fallback (vk_mesh_path.h: never measured with the early
 // tail), a frame dump or a pass capture, nor inside a chunk or a continuation.
+// NX2NAVI_TAIL_ALL (tail_all) widens it to the frames above that never went early. Without DLSS or FSR 3.1 the tail
+// begins where our stand-in for the game's scene upscaler records (vk_exec_draw.c untranslated_dispatch_fallback): what
+// follows it in the stream is the interface and the copy into the window texture, as after the temporal upscalers.
+// With the lazy write-back (NVIDIA's and Intel's default) a tail's inline uniform update of a mirrored block whose
+// pages are not armed reaches guest memory from the bytes as above; one whose pages may be armed is noted as a write,
+// and that tail goes after the write-backs (op_update_ub). A block armed after the update was recorded is given back
+// before the bytes are stored (vk_exec_xfer.c ub_write_cb). On by default: running through Hyrule Field on an RTX 4070
+// (lazy write-back, the stand-in upscaler at 2560x1440, 2026-11-15) every tail went early, the GPU running each for
+// about 0.6 to 1 ms, and three-minute runs gave 47.7, 49.6 and 46.6 fps against 42.9, 38.9 and 44.9 without, with
+// fewer frames over 50 ms.
 static struct {
     int on;                  // the submission's tail is being recorded
     int live0;               // vk_mem_live_swap's note from before it
@@ -1193,6 +1203,21 @@ static int tail_enabled(void) {
             rt_log("vk: the write-backs go before a frame's tail, and the game's waits end there (NX2NAVI_TAIL_EARLY)");
     }
     return on;
+}
+
+int vk_exec_tail_all(void) {
+    static int on = -1;
+    if (on < 0) {
+        on = tail_enabled() && cfg_bool("NX2NAVI_TAIL_ALL");
+        if (on)
+            rt_log("vk: the early tail also begins at the stand-in upscaler and goes with the lazy write-back "
+                   "(NX2NAVI_TAIL_ALL)");
+    }
+    return on;
+}
+
+void vk_exec_tail_standin(VkExec *ex) {
+    if (vk_exec_tail_all()) vk_exec_tail_begin(ex);
 }
 
 int vk_exec_split_now(VkExec *ex) {

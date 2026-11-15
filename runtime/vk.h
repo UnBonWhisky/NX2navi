@@ -447,6 +447,10 @@ void vk_exec_note_results(int kind);   // VK_RES_*
 // how long that takes (tail_pending_ns, else 0).
 struct VkExec;
 void vk_exec_tail_begin(struct VkExec *ex);
+// NX2NAVI_TAIL_ALL: the tail begins at the stand-in for the game's scene upscaler as well (vk_exec_tail_standin), and
+// goes early with the lazy write-back (vk_exec_tail_all)
+void vk_exec_tail_standin(struct VkExec *ex);
+int vk_exec_tail_all(void);
 int vk_exec_tail(void);
 void vk_exec_tail_ub(uint64_t fence, uint64_t addr, const void *data, uint32_t size);   // vk_exec_xfer.c
 int vk_sync_tail_ok(void);
