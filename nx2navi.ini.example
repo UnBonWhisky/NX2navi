@@ -111,8 +111,10 @@
 # the pictures stay the same.
 # replay_workers = auto
 # How long (microseconds, 0 to 2000) a replay worker with nothing to record polls for the next batch before it sleeps
-# until it is woken. Default: 100.
-# replay_spin_us = 100
+# until it is woken. Default: 20 (100 up to this build): the next batch mostly comes 0.5 to 1.5 ms later, so the longer
+# poll mostly ran out. Hyrule Field on an RTX 4070, three runs each: 212.9 instead of 226.4 CPU seconds per minute, the
+# same frame rate (51.4 against 51.7 fps).
+# replay_spin_us = 20
 # 1, the default, lets the game start on its next frame while the graphics card still runs the end of the last one: the
 # upscaler (FSR 4, FSR 3.1 or DLSS) and the interface drawn after it. The graphics card runs the same work, with the
 # copies of what it wrote for the game moved before that end, and the game's waits end once those copies and the

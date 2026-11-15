@@ -348,7 +348,7 @@ static const CfgMeta metas[] = {
     // vk_exec.c "the early tail", tail_all: also at the stand-in upscaler and with the lazy write-back
     {"TAIL_ALL", "1", "0|1", RESTART},
     {"REPLAY_SMALL", "0", "0..63", RESTART},   // vk_exec.c group_start
-    {"REPLAY_SPIN_US", "100", "0..2000", RESTART},   // vk_exec.c rw_init
+    {"REPLAY_SPIN_US", "20", "0..2000", RESTART},   // vk_exec.c rw_init
     {"FREE_CORES", "0", "0|1", RESTART}, {"TIMER_1MS", "1", "0|1", RESTART},
     // dynamic resolution (dynres.c): the scene follows the GPU time toward DYN_RES_TARGET milliseconds (under 1: the
     // frame limit's frame time), holding each step DYN_RES_STEP 60 Hz frames of the clock

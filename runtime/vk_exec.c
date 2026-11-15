@@ -2173,7 +2173,8 @@ static void rw_init(void) {
     }
     // A worker with nothing to record polls this long for the next chunk, then sleeps until the next hand-out wakes it.
     // The next group of a frame mostly comes 0.5 to 1.5 ms after the last one (Hyrule Field: the timeline of run m0),
-    // so most polls ran out unanswered.
+    // so most polls ran out unanswered: 20 us instead of 100 took 212.9 instead of 226.4 CPU seconds a minute there
+    // (RTX 4070, three runs each), at the same frame rate.
     int spin = cfg_int("NX2NAVI_REPLAY_SPIN_US");
     RW.idle_spin_ns = (uint64_t)(spin < 0 ? 0 : spin > 2000 ? 2000 : spin) * 1000;
     for (int k = 0; k < RW.n; k++) {
