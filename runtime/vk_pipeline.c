@@ -5142,6 +5142,9 @@ static void pressure_release(uint64_t now) {
     }
     if (!on || now - last < RELEASE_EVERY_MS) return;
     last = now;
+    // Not once pipeline-cache.bin's cache is given back (base_release): a pipeline given back now would compile at its
+    // next draw instead of coming from that cache.
+    if (P.base_gone) return;
     uint64_t used = 0, budget = 0;
     if (!vk_mem_vram_live(&used, &budget) || !budget) return;
     if (rel_used0) {
@@ -9036,9 +9039,11 @@ static void cache_sizes_ask(void) {
 // pipeline-cache.bin is not written in play anyway (only its fold, P.fold, which this waits for), and what the base
 // cache gained in memory came from the driver's own disk cache, which keeps it. The next start reads both files as
 // before. Only with a play cache, no pipeline binaries, and mesh shaders on the GPU (emu_compute reads P.cache without
-// cache_rw, so a GPU that emulates mesh stages keeps it). A pipeline given back for video memory (pressure_release) or
-// one the boot did not prebuild may then compile where the base cache would have held it.
+// cache_rw, so a GPU that emulates mesh stages keeps it). Neither does a card with less than BASE_MIN_BUDGET_MB of
+// video memory budget (below), and pressure_release gives no pipeline back once it is gone. A pipeline the boot did
+// not prebuild may then compile where the base cache would have held it.
 #define BASE_QUIET_MS 60000
+#define BASE_MIN_BUDGET_MB 7168   // the budgets of 8 GB cards and up
 static int lb_done(void) { return !__atomic_load_n(&LB.running, __ATOMIC_ACQUIRE); }
 
 static void base_release(uint64_t now) {
@@ -9051,6 +9056,12 @@ static void base_release(uint64_t now) {
     }
     if (!on || P.base_gone || !P.cache || !P.play || P.cache == P.play || P.fold || PB.on || prep_mode) return;
     if (!vk_ctx()->has_mesh_shader || vk_ctx()->mesh_fallback) return;
+    // Cards short of video memory keep it: there pressure_release gives unused pipelines back, and each one a later area
+    // draws again is built from this cache. Emulating a 5000 MiB card on the route, with the cache given back, the play
+    // file grew by 12 MB of such pipelines compiled again and one area load spent 446 ms in 221 creates (run v5k,
+    // 2026-11-15). So only from BASE_MIN_BUDGET_MB of budget on, and not once pipelines were given back.
+    uint64_t vused = 0, vbudget = 0;
+    if (rel_batches || !vk_mem_vram_live(&vused, &vbudget) || vbudget < (uint64_t)BASE_MIN_BUDGET_MB << 20) return;
     VkPipeStats st;
     vk_pipeline_stats(&st);
     uint64_t n = st.graphics + st.compute + cache_merges + __atomic_load_n(&P.play_made, __ATOMIC_RELAXED);

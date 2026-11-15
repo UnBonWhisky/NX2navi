@@ -303,7 +303,8 @@
 # copy of pipeline-cache.bin is given back (it stays in memory for the whole run otherwise: as large as the file, often
 # 0.7 to 1.6 GB); new pipelines still go into pipeline-cache-play.bin, and the next start reads both files as before. A
 # pipeline the driver no longer has in its own disk cache then compiles in the background instead of coming from the
-# file. Needs pipeline_cache_play = 1. 0: the copy stays for the run. In a Hyrule Field run on an RTX 4070 it gave
+# file. Needs pipeline_cache_play = 1, and a video memory budget of 7168 MiB or more (8 GB cards and up): on a smaller
+# card unused pipelines are given back for video memory and built again from that copy. 0: the copy stays for the run. In a Hyrule Field run on an RTX 4070 it gave
 # back 1578 MB: commit 20.2 to 18.5 GB, working set 12.5 to 10.6 GB.
 # pipeline_cache_release = 1
 # 1: the pipelines FSR 3.1 makes for upscaling and frame generation are kept in the pipeline cache files, so a later
