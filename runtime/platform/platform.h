@@ -330,6 +330,10 @@ void plat_crash_context(const char *s);
 // place (who: that filter's module and offset), 0 when it was still there. Windows only; 0 elsewhere.
 int plat_crash_filter_reassert(char *who, size_t n);
 const char *plat_crash_context_get(void);   // the calling thread's note, for the crash report (NULL: none)
+// The video memory of the GPU with the most of it (Windows: DXGI's adapters, the software one left out): its dedicated
+// memory in MiB, and in *integrated whether it is a GPU without memory of its own. 0 when not known (elsewhere).
+// Asked before any graphics device exists (cfg.c "graphics tiers").
+int64_t plat_gpu_vram_mb(int *integrated);
 int plat_mem_read(uint64_t addr, void *out, size_t n);    // copies n bytes, 0 instead of faulting on unmapped memory
 int plat_mem_readable(uint64_t addr, uint64_t n);         // every page of [addr, addr + n) can be read; no fault
 void *plat_aligned_alloc(size_t size, size_t align);      // free with plat_aligned_free; NULL on failure

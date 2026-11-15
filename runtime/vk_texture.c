@@ -1187,7 +1187,9 @@ static int detail_most(void) {   // the most levels a texture is made without: 0
     const char *v = cfg_value("NX2NAVI_TEXTURE_DETAIL");
     most = !strcmp(v, "full") ? 0 : !strcmp(v, "reduced") ? 1 : !strcmp(v, "low") ? 2 : -1;
     if (most >= 0) {
-        rt_log("vk: texture detail: %s (texture_detail)", v);
+        if (cfg_is_set("NX2NAVI_TEXTURE_DETAIL")) rt_log("vk: texture detail: %s (texture_detail)", v);
+        else rt_log("vk: texture detail: %s (the graphics tier %s's; texture_detail = auto gives the rule by the video "
+                    "memory budget)", v, cfg_graphics_tier());
     } else {
         most = vk_texture_detail_auto();
         if (!detail_budget_mb)

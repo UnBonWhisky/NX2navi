@@ -690,8 +690,20 @@
 # held frames over 50 ms five times as often), and never full on integrated graphics, whose video memory is the PC's own
 # memory. Where the ASTC textures stay uncompressed (astc =
 # cpu or astc_bc = 0) and the budget is under 20480 MiB, auto goes one step lower, as they take four times the memory.
-# The log says what was picked ("texture detail:"). Read at start.
+# The log says what was picked ("texture detail:"). Read at start. Unset, the graphics tier below gives the level.
 # texture_detail = auto
+# Graphics tier: the defaults of the display settings by the card's video memory. auto (default) picks it at start
+# from the video memory of the GPU with the most of it; off keeps the defaults written in this file; or one of these:
+#   minimum  cards of 4 GB and less, and integrated graphics: scene_share 0.5, dlss = performance, sharpness 30,
+#            operation_mode = handheld, texture_detail = low
+#   low      6 GB: scene_share 0.75, dlss = quality, sharpness 30, operation_mode = handheld, texture_detail = low
+#   balanced 8 GB: scene_share 1 (Native), dlss = dlaa, sharpness 30, operation_mode = docked, texture_detail = reduced
+#   high     10 and 12 GB: scene_share 1, dlss = dlaa, sharpness 40, operation_mode = docked, texture_detail = reduced
+#   ultra    16 GB and more: scene_share 1, dlss = dlaa, sharpness 50, operation_mode = docked, texture_detail = full
+# A tier only gives defaults: every one of those keys you set yourself here (or in the menu) wins over it, and a
+# key reset in the menu goes back to the tier's value. The dlss line is the mode used when DLSS or FSR 3.1 is on; the
+# tier never turns either on or off. The log says which tier was picked and why ("graphics tier"). Read at start.
+# graphics_tier = auto
 # Sun shadow map size: game (the game's own, which changes with the view and drops to about 400 near the ground, so
 # leaf shadows look blocky and jump) or a fixed 256, 512, 768, 1024, 1536 or 2048. Above 960 the texture heap grows with
 # it. 256 is coarser than the game's own and is for integrated GPUs short of memory bandwidth. Read at start.

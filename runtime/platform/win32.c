@@ -7,6 +7,8 @@
 #include <winsock2.h>   // before windows.h, which would otherwise pull in the old winsock.h
 #include <ws2tcpip.h>
 #include <windows.h>
+#define COBJMACROS
+#include <dxgi.h>       // plat_gpu_vram_mb
 #include <aclapi.h>     // SetNamedSecurityInfoW (plat_file_private)
 #include <bcrypt.h>
 #include <pdh.h>
@@ -1286,6 +1288,36 @@ void plat_reexec(void) {
     DWORD code = 70;
     GetExitCodeProcess(pi.hProcess, &code);
     ExitProcess(code);
+}
+
+// DXGI from its DLL, as nothing else of this process links it. An adapter with less than 1 GiB of dedicated memory and
+// shared memory beside it is taken as integrated (Intel's and AMD's integrated GPUs report 128 to 512 MiB).
+int64_t plat_gpu_vram_mb(int *integrated) {
+    *integrated = 0;
+    HMODULE dll = LoadLibraryW(L"dxgi.dll");
+    if (!dll) return 0;
+    typedef HRESULT(WINAPI * Create)(REFIID, void **);
+    Create create = (Create)(void (*)(void))GetProcAddress(dll, "CreateDXGIFactory1");
+    IDXGIFactory1 *f = NULL;
+    int64_t best = 0;
+    int best_int = 0;
+    static const GUID iid = {0x770aae78, 0xf26f, 0x4dba, {0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87}};   // IDXGIFactory1
+    if (create && SUCCEEDED(create(&iid, (void **)&f)) && f) {
+        IDXGIAdapter1 *a = NULL;
+        for (UINT i = 0; IDXGIFactory1_EnumAdapters1(f, i, &a) != DXGI_ERROR_NOT_FOUND; i++) {
+            DXGI_ADAPTER_DESC1 d;
+            if (SUCCEEDED(IDXGIAdapter1_GetDesc1(a, &d)) && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+                int64_t mb = (int64_t)(d.DedicatedVideoMemory >> 20);
+                int igpu = mb < 1024 && d.SharedSystemMemory > 0;
+                if (!best || (best_int && !igpu) || (best_int == igpu && mb > best)) best = mb ? mb : 1, best_int = igpu;
+            }
+            IDXGIAdapter1_Release(a);
+        }
+        IDXGIFactory1_Release(f);
+    }
+    FreeLibrary(dll);
+    *integrated = best_int;
+    return best;
 }
 
 int plat_mem_read(uint64_t addr, void *out, size_t n) {

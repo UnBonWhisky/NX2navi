@@ -18,6 +18,7 @@
 #include "cfg.h"
 #include "cfg_private.h"
 #include "discord_app.h"
+#include "gfx_tier.h"
 #include "host.h"
 #include "platform/platform.h"
 
@@ -87,7 +88,7 @@ static const char *const known[] = {
     "UPLOAD_BATCH_MB", "VRAM_HEAP_LIMIT", "VRAM_RESERVE_MB", "TEX_CLOBBER", "LOW_END_GPU",
     "ZSTD_CHECK", "ZSTD_NATIVE",
     "BIND_REUSE", "DYN_DELTA", "STG_ARENA", "SUBMIT_BATCH", "SUBMIT_THREAD", "ASTC_GPU_DESWIZZLE", "ASTC_SCRATCH_KEEP", "ASTC_ARENA", "ASTC_BC1",
-    "TEXUP_LOG_MS", "DYN_RES", "DYN_RES_TARGET", "DYN_RES_STEP", "TEXTURE_DETAIL", "VRAM_USE",   // vram_use: the removed Video memory use row, read by nothing
+    "TEXUP_LOG_MS", "DYN_RES", "DYN_RES_TARGET", "DYN_RES_STEP", "TEXTURE_DETAIL", "GRAPHICS_TIER", "VRAM_USE",   // vram_use: the removed Video memory use row, read by nothing
     "RECORDER_CORE", "RECORDER_PRIO", "REPLAY_TIME", "LOCK_TIME", "POOL_CREATE_BUDGET", "POOL_CREATE_MS", "POOL_FINI_IDLE", "POOL_LOAD_BACKLOG", "POOL_LOAD_MS",
     "VMA_BLOCK_MB", "SYNC_WAKE_ALL", "LOG_ASYNC", "DEVICE_LOST_AT", "STAGING_FAIL_AT", "VRAM_BALLAST_MB", "VRAM_EMULATE_MB",
     "GEN_SEED",
@@ -127,7 +128,7 @@ static const struct { const char *key, *section; } sections[] = {
     {"FULLSCREEN", "display"}, {"WINDOW_SIZE", "display"}, {"PERF_OVERLAY", "display"}, {"VK_PRESENT", "display"},
     {"GPU_INDEX", "display"}, {"MONITOR", "display"}, {"OUTPUT_RES", "display"}, {"GAME_ASPECT", "display"}, {"GAME_RES", "display"}, {"RENDER_SCALE", "display"}, {"UPSCALER", "display"},
     {"SHARPNESS", "display"}, {"STANDIN_FILTER", "display"}, {"SCENE_SHARE", "display"}, {"ASPECT", "display"}, {"FOV", "display"}, {"ANISO", "display"},
-    {"TEXTURE_DETAIL", "display"},
+    {"TEXTURE_DETAIL", "display"}, {"GRAPHICS_TIER", "display"},
     {"COLOR_PRESET", "display"},
     {"COLOR_BRIGHTNESS", "display"}, {"COLOR_CONTRAST", "display"}, {"COLOR_SATURATION", "display"},
     {"COLOR_GAMMA", "display"}, {"HDR", "display"}, {"HDR_LIVE", "display"}, {"HDR_PEAK_NITS", "display"}, {"HDR_GAME_NITS", "display"},
@@ -250,7 +251,8 @@ static const CfgMeta metas[] = {
     {"GAME_RES", "1440", "1080|1440|1800|2160|2880|window", RESTART},   // widescreen.c: the picture's height
     {"ASPECT", "fit", "fit|stretch", LIVE}, {"FOV", "100", "70..140", LIVE},
     {"ANISO", "16", "game|2|4|8|16", LIVE},   // vk_texture.c sampler_features, vk_sampler_aniso_live; 16: the game asks 1x or 2x
-    {"TEXTURE_DETAIL", "auto", "auto|full|reduced|low", RESTART},   // vk_texture.c "texture detail", read at the first texture
+    {"TEXTURE_DETAIL", "auto", "auto|full|reduced|low", RESTART},
+    {"GRAPHICS_TIER", "auto", "auto|off|minimum|low|balanced|high|ultra", RESTART},   // cfg.c "graphics tiers"   // vk_texture.c "texture detail", read at the first texture
     // colour adjustment (vk_color.c); the preset is the menu's, the four values are what the present uses
     {"COLOR_PRESET", "default", "default|vivid|clarity|custom", LIVE}, {"COLOR_BRIGHTNESS", "0", "-30..30", LIVE},
     {"COLOR_CONTRAST", "100", "70..150", LIVE}, {"COLOR_SATURATION", "100", "50..200", LIVE},
@@ -870,6 +872,82 @@ static int profile_of(void) {
 
 const char *cfg_device_profile(void) { return profile_of() ? "deck" : "desktop"; }
 
+// ---- graphics tiers (NX2NAVI_GRAPHICS_TIER = auto | off | minimum | low | balanced | high | ultra; gfx_tier.h): defaults
+// for the display settings by the card's video memory, below the environment, nx2navi.ini and a device profile and
+// above the table, so a key the player sets wins and resetting it in the menu returns to the tier's value. auto (the
+// default) picks the tier from the video memory of the GPU with the most of it, or from vram_emulate_mb when that is set
+// (a test run then gets the emulated card's tier); off keeps the table's defaults; a tier's name forces it. Decided
+// once, at the first question, before any graphics device exists: the game's render-target heap is sized from the
+// scene's share at the start (widescreen.c heap_share), so the share has to be known then. Read through raw_get only.
+#define TIER_UNDECIDED (-100)
+static volatile int32_t tier = TIER_UNDECIDED;
+static volatile int32_t tier_ready;   // cfg_init has read nx2navi.ini: graphics_tier is known (before: no tier values)
+static int64_t tier_mb;           // the video memory it went by, MiB; 0 not known
+static int tier_igpu, tier_how;   // an integrated GPU; 0 auto from the GPU, 1 auto from vram_emulate_mb, 2 set, 3 off
+
+static int tier_of(void) {
+    int t = __atomic_load_n(&tier, __ATOMIC_ACQUIRE);
+    if (t != TIER_UNDECIDED) return t;
+    int set = gfx_tier_setting(raw_get(PREFIX "GRAPHICS_TIER"));
+    if (set >= 0) {
+        t = set, tier_how = 2;
+    } else if (set == -1) {
+        t = -1, tier_how = 3;
+    } else {   // auto, and a value check_values reports as outside the choices
+        const char *em = raw_get(PREFIX "VRAM_EMULATE_MB");
+        int64_t emulate = em && *em ? atoll(em) : 0;
+        if (emulate > 0) tier_mb = emulate, tier_igpu = 0, tier_how = 1;
+        else tier_mb = plat_gpu_vram_mb(&tier_igpu), tier_how = 0;
+        t = gfx_tier_pick(tier_mb, tier_igpu);
+    }
+    __atomic_store_n(&tier, t, __ATOMIC_RELEASE);
+    return t;
+}
+
+static const char *tier_value(const char *key) {
+    if (!__atomic_load_n(&tier_ready, __ATOMIC_ACQUIRE)) return NULL;
+    int t = tier_of();
+    if (t < 0) return NULL;
+    for (size_t i = 0; i < sizeof gfx_tier_rows / sizeof *gfx_tier_rows; i++)
+        if (!strcasecmp(gfx_tier_rows[i].key, key)) return gfx_tier_rows[i].value[t];
+    return NULL;
+}
+
+const char *cfg_graphics_tier(void) {
+    if (!__atomic_load_n(&tier_ready, __ATOMIC_ACQUIRE)) return "off";
+    int t = tier_of();
+    return t >= 0 ? gfx_tier_names[t] : "off";
+}
+
+// The start's line: the tier and what it went by.
+static void tier_log(void) {
+    int t = tier_of();
+    if (tier_how == 3) {
+        rt_log("cfg: graphics tier off (graphics_tier = off): the settings table's defaults");
+        return;
+    }
+    char vals[256];
+    int o = 0;
+    for (size_t i = 0; t >= 0 && i < sizeof gfx_tier_rows / sizeof *gfx_tier_rows && o < (int)sizeof vals - 40; i++) {
+        char var[80];
+        snprintf(var, sizeof var, PREFIX "%s", gfx_tier_rows[i].key);
+        const char *own = raw_get(var);
+        char low[40];
+        snprintf(low, sizeof low, "%s", gfx_tier_rows[i].key);
+        for (char *p = low; *p; p++) *p = (char)tolower((unsigned char)*p);
+        o += snprintf(vals + o, sizeof vals - (size_t)o, "%s%s %s%s", i ? ", " : "", low,
+                      own && *own ? own : gfx_tier_rows[i].value[t], own && *own ? " (set)" : "");
+    }
+    if (t < 0)
+        rt_log("cfg: graphics tier: none (the GPU's video memory is not known here): the settings table's defaults");
+    else if (tier_how == 2)
+        rt_log("cfg: graphics tier %s (graphics_tier = %s): %s", gfx_tier_names[t], gfx_tier_names[t], vals);
+    else
+        rt_log("cfg: graphics tier %s, chosen for %lld MiB of video memory%s%s (graphics_tier = auto; off keeps the "
+               "table's defaults): %s", gfx_tier_names[t], (long long)tier_mb,
+               tier_how == 1 ? " (vram_emulate_mb, a test)" : "", tier_igpu ? " on an integrated GPU" : "", vals);
+}
+
 static const char *raw_get(const char *name) {
     const char *e = getenv(name);
     if (e || strncmp(name, PREFIX, PREFIX_LEN)) return e;
@@ -908,7 +986,7 @@ static const char *cfg_get_now(const char *name) {
     if (profile_of())
         for (size_t i = 0; i < sizeof DECK / sizeof *DECK; i++)
             if (!strcasecmp(DECK[i].key, name + PREFIX_LEN)) return DECK[i].value;
-    return NULL;
+    return tier_value(name + PREFIX_LEN);
 }
 
 // Whether name's value comes from the player (the environment or nx2navi.ini), not a profile or the table.
@@ -1013,6 +1091,8 @@ const char *cfg_default(const char *key) {
     if (profile_of())
         for (size_t i = 0; i < sizeof DECK / sizeof *DECK; i++)
             if (!strcasecmp(DECK[i].key, name)) return DECK[i].value;
+    const char *t = tier_value(name);
+    if (t) return t;
     const CfgMeta *m = cfg_meta(key);
     return m ? m->def : NULL;
 }
@@ -1446,6 +1526,10 @@ void cfg_init(void) {
     if (profile_of())
         rt_log("cfg: device profile Steam Deck: defaults for the keys nx2navi.ini does not set (NX2NAVI_DEVICE_PROFILE=desktop "
                "turns it off)");
+    tier_of();
+    __atomic_store_n(&tier_ready, 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&version, 1, __ATOMIC_RELEASE);   // values read before now go by the tier from here on
+    tier_log();
     if (lowend_set())
         rt_log("cfg: low_end_gpu is on, and the low-end GPU mode was removed in 0.11.0: the line does nothing, and the game "
                "runs as it does without it. The mode's single settings (mesh_emulation, tex_clobber, foliage, "

@@ -1610,6 +1610,11 @@ void plat_reexec(void) {
     _exit(70);
 }
 
+int64_t plat_gpu_vram_mb(int *integrated) {   // not asked here: the graphics tiers keep the table's defaults
+    *integrated = 0;
+    return 0;
+}
+
 int plat_mem_read(uint64_t addr, void *out, size_t n) {
     struct iovec local = {out, n}, remote = {(void *)(uintptr_t)addr, n};
     return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == (ssize_t)n;

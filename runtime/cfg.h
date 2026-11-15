@@ -32,6 +32,7 @@ int cfg_is_set(const char *name);
 const char *cfg_unknown_keys(int *count);
 // The device profile in use, "deck" or "desktop" (NX2NAVI_DEVICE_PROFILE, else what the machine is).
 const char *cfg_device_profile(void);
+const char *cfg_graphics_tier(void);   // the graphics tier in effect (cfg.c "graphics tiers"), "off" for none
 // Writes the keys cfg_set changed since the last save into nx2navi.ini next to nx2navi.exe (cfg_save_to: the file at path).
 // Only those lines change: the last line of a changed key gets the new value, a missing key goes under its section
 // (after the commented example line of the key when the section has one; the section is added at the end of the file
