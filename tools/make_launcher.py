@@ -295,14 +295,16 @@ def build_runtime_lib(folder, ver, out, wine):
     runtime/ themselves."""
     msys = Layout(root=MAIN_ROOT / 'toolchain' / 'launcher-msys').msys
     app = folder / 'app' / ver
+    # -B: make_game.py runs from the release folder, and the bytecode Python would write beside the tools it imports
+    # (check_content.py holds the marker of generated files) would be refused by the content check below
     args = ['--make-runtime-lib', app / 'lib', '--obj', out / 'native' / 'runtime-obj', '--msys', msys]
     if os.name == 'nt':
-        run([sys.executable, app / 'tools' / 'make_game.py', *args])
+        run([sys.executable, '-B', app / 'tools' / 'make_game.py', *args])
     elif wine:
         def win(p):
             return 'Z:' + str(Path(p).resolve()).replace('/', '\\')
         env = dict(os.environ, WINEDEBUG='-all', NX2NAVI_AR=win(msys / 'bin' / 'ar.exe'))
-        run(['wine', folder / 'python' / 'python.exe', win(app / 'tools' / 'make_game.py'),
+        run(['wine', folder / 'python' / 'python.exe', '-B', win(app / 'tools' / 'make_game.py'),
              *[win(a) if isinstance(a, Path) else a for a in args]], env=env)
     else:
         say('note: no prebuilt runtime (it is built on Windows, or with --wine): players compile runtime/ themselves')
