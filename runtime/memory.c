@@ -287,7 +287,7 @@ static volatile uint32_t lz_fetch_ms;      // plat_now_ms() | 1 at the end of th
 // take-out, and mem_lazy_touches counts the range.
 #define LZ_FLY 64          // more than the threads that touch armed pages at once; when full, a touch waits for room
 #define LZ_BATCH 16        // segments a release takes out together and fetches in one call (1 with the setting at 0)
-typedef struct { uint64_t lo, hi, h0, bytes; uint32_t seq, tid; uint8_t used; } LzFly;   // bytes: to fetch, 0 none
+typedef struct { uint64_t lo, hi, h0, h1, bytes; uint32_t seq, tid; uint8_t used; } LzFly;   // bytes: to fetch, 0 none
 static LzFly lz_fly[LZ_FLY];               // lz_lock
 static volatile int32_t lz_nfly;           // lz_lock: entries in use (read without it as a hint)
 static PlatCond lz_fly_cv = PLAT_COND_INIT;   // with lz_lock: an entry ended
@@ -349,7 +349,7 @@ static int lazy_fly_start_locked(LzSeg s) {
     int k = 0;
     while (lz_fly[k].used) k++;
     LzFly *f = &lz_fly[k];
-    f->lo = s.lo, f->hi = s.hi, f->h0 = s.h0, f->bytes = s.stale ? s.hi - s.lo : 0, f->tid = plat_thread_id();
+    f->lo = s.lo, f->hi = s.hi, f->h0 = s.h0, f->h1 = s.h1, f->bytes = s.stale ? s.hi - s.lo : 0, f->tid = plat_thread_id();
     f->used = 1;
     lz_nfly++;
     if (lz_nfly > lz_fly_most) lz_fly_most = lz_nfly;
@@ -825,6 +825,43 @@ void mem_lazy_release(const uint64_t (*rg)[3], int nr) {
         if (lz_unlocked) plat_mutex_unlock(&frz_lock);
         lazy_fly_run(k, s, n);
         if (!lz_unlocked) plat_mutex_unlock(&frz_lock);
+    }
+}
+
+// Where a mirror or an imported buffer is dropped (vk_memory.c mirror_evict, hot_check, pool_fini): armed ranges that
+// still name buffer h, as the mirror a fetch copies from (h0) or the buffer it copies into (h1), are given back without
+// a fetch, after the ranges in flight that name it have ended. The releases before those calls take every such range
+// already, so this finds none; one it finds is a range whose next touch would have had the GPU copy from or into freed
+// memory, a read or write fault that loses the device (the class of the loss seen with NX2NAVI_WB_LAZY_CHUNK=1 after
+// save loads, memory.c "Lazy write-back"), and the count goes to the log. Returns how many armed ranges there were.
+int mem_lazy_orphans(uint64_t h) {
+    if (!__atomic_load_n(&lz_on, __ATOMIC_RELAXED) || !h) return 0;
+    int n = 0;
+    plat_mutex_lock(&frz_lock);
+    for (;;) {
+        plat_mutex_lock(&lz_lock);
+        int i = lz_n;
+        while (i-- > 0 && lzs[i].h0 != h && lzs[i].h1 != h) {}
+        if (i < 0) {   // the flights end without frz_lock, as mem_lazy_release waits for them
+            plat_mutex_unlock(&frz_lock);
+            for (int k = 0; k < LZ_FLY; k++)
+                if (lz_fly[k].used && (lz_fly[k].h0 == h || lz_fly[k].h1 == h)) lazy_fly_wait_entry_locked(k), k = -1;
+            plat_mutex_unlock(&lz_lock);
+            return n;
+        }
+        if (lz_nfly >= LZ_FLY) {
+            plat_mutex_unlock(&frz_lock);
+            lazy_fly_room_locked();
+            plat_mutex_unlock(&lz_lock);
+            plat_mutex_lock(&frz_lock);
+            continue;
+        }
+        lzs[i].stale = 0;   // its buffer goes: its pages only, as mem_lazy_skip gives a foreign range back
+        LzSeg s = lazy_take_locked(i);
+        int f = lazy_fly_start_locked(s);
+        plat_mutex_unlock(&lz_lock);
+        n++, lz_other++;
+        lazy_fly_run(&f, &s, 1);   // no fetch (stale 0): its pages only, under frz_lock as mem_lazy_skip's give-back
     }
 }
 

@@ -690,6 +690,16 @@ static uint32_t gpa_cover(uint64_t a) {
     return rec;
 }
 
+// A buffer a lazily written range may name is about to go (memory.c mem_lazy_orphans): any range still naming it is
+// given back without a fetch and the log says so. None is expected; see mem_lazy_orphans.
+static void lazy_orphans_check(uint64_t h, const char *what) {
+    int n = mem_lazy_orphans(h);
+    static volatile int32_t said;
+    if (n && plat_inc32(&said) <= 16)
+        rt_log("mem: lazy write-back: %d armed ranges still named %s; given back without a fetch (a fetch would have "
+               "copied freed memory)", n, what);
+}
+
 static void pool_fini(pool_t *p) {
     VkCtx *c = vk_ctx();
     if (!c) return;
@@ -720,6 +730,8 @@ static void pool_fini(pool_t *p) {
     for (int i = 0; i < r->nvmaps; i++) vk_gpa_unmap(r->vmaps[i].lo, r->vmaps[i].hi, r->vmaps[i].rec, NULL);
     free(r->vmaps), r->vmaps = NULL, r->nvmaps = 0;
     if (r->kind == POOL_IMPORT) mem_thaw(r->lo, r->size);   // the storage goes back to the guest writable
+    if (r->mbuf) lazy_orphans_check((uint64_t)(uintptr_t)r->mbuf, "the mirror of a finalized pool");
+    if (r->buf) lazy_orphans_check((uint64_t)(uintptr_t)r->buf, "the buffer of a finalized pool");
     // Images cut from this range go first; a used buffer or memory waits until the GPU is done with it, since the
     // guest gets the storage back when this returns.
     vk_texture_range_gone(r->lo, r->size, r->alloc);
@@ -2909,7 +2921,10 @@ static uint64_t mirror_evict(uint64_t need, uint32_t min_idle, const char *why) 
         n++;
     }
     plat_mutex_unlock(&pool_lock);
-    for (int i = 0; i < n; i++) vk_defer_buffer(dead[i], dead_a[i]);   // after the submission being recorded
+    for (int i = 0; i < n; i++) {
+        lazy_orphans_check((uint64_t)(uintptr_t)dead[i], "a mirror evicted");
+        vk_defer_buffer(dead[i], dead_a[i]);   // after the submission being recorded
+    }
     if (n) {
         plat_add64(&m_evicted_n, n);
         plat_add64(&m_evicted_bytes, (int64_t)freed);
@@ -4304,6 +4319,7 @@ static void hot_check(void) {
     }
     plat_mutex_unlock(&pool_lock);
     for (int k = 0; k < nout; k++) {
+        lazy_orphans_check((uint64_t)(uintptr_t)dead[k], "a mirror taken away for its copies (hot check)");
         vk_defer_buffer(dead[k], dead_a[k]);   // after the submission being recorded
         char f[160];
         flag_names(note[k].flags, f, sizeof f);

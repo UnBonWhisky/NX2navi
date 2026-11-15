@@ -303,6 +303,7 @@ int mem_copy_readable(uint8_t *const *dst, const uint64_t (*src)[2], int n, uint
 int mem_lazy_touches(uint64_t a, uint64_t n);   // 0: the CPU can read [a, a + n) without a fault now
 void mem_lazy_window(int open);
 void mem_lazy_release(const uint64_t (*rg)[3], int n);   // rg[i] = {lo, hi, buffer or 0 for any}: armed parts come down
+int mem_lazy_orphans(uint64_t h);   // armed ranges still naming buffer h given back without a fetch; how many
 void mem_lazy_report(uint64_t frame, uint64_t skipped);
 void mem_lazy_note(char *out, size_t n);                   // its state as a phrase, without a lock (a fatal error's line)
 int mem_lazy_pick(uint64_t *addr, int max);                // test: addresses of armed pages
