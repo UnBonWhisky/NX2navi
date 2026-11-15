@@ -1130,7 +1130,12 @@ static int astc_opaque(const tex_t *t, uint64_t addr, const TexVkFormat *f) {
 // 24 GiB card, 4.6 GiB of it free space inside the allocator's blocks, which the pressure check leaves out and the
 // driver does not (vk_mem_vram_live). With that card filled to the room of an 8 GiB one, memory went to system memory
 // and the same tour ran at 29.6 fps with a 1% low of 11.4; with reduced, 42.8 and 36.4, and nothing spilled. So full
-// starts at 10,240 MiB of budget, the cards of 12 GiB (a 12 GiB card's budget was 11,313 MiB in a player's log).
+// started at 10,240 MiB of budget, the cards of 12 GiB (a 12 GiB card's budget was 11,313 MiB in a player's log).
+// A 12 GiB card is not enough for it either. On an RTX 4070 (budget 10,255 to 11,432 MiB) a 13-minute route through
+// Hyrule Field, Kakariko, the Deku Tree, the Market and Kokiri Forest at the default settings with full peaked at
+// 10,952 MiB in use against a 10,255 MiB budget: 160 frames over 50 ms, 13 over 100, the worst minute's 1% low 12.8 fps,
+// 49.0 fps on average. With reduced the peak was 7,943 MiB: 33 frames over 50 ms, 7 over 100, the worst minute's 1% low
+// 27.6, 50.1 fps (2026-11-15, 0.11.0). So full starts at 12,288 MiB of budget, the cards of 16 GiB.
 // An integrated GPU's budget is a share of the system's memory, not memory of its own: one reported 10,361 MiB on a
 // handheld with 16 GiB of memory in all, auto chose full, and the game ended when a save was loaded until its player
 // set reduced. auto never chooses full there.

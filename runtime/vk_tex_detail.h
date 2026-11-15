@@ -5,7 +5,7 @@
 
 // Full from DETAIL_FULL_MB of device-local budget on, low under DETAIL_LOW_MB, reduced between; under DETAIL_RGBA8_MB
 // one step lower where the ASTC textures stay uncompressed. vk_texture.c says where each number comes from.
-#define DETAIL_FULL_MB 10240
+#define DETAIL_FULL_MB 12288
 #define DETAIL_LOW_MB 6144
 #define DETAIL_RGBA8_MB 20480
 

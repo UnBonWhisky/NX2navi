@@ -22,14 +22,16 @@ int main(void) {
     // ---- the budgets in players' logs of 0.10.1
     expect(10361, 1, 0, 1, "ROG Ally X, integrated (0.10.1: full, ended at save load)");
     expect(7365, 0, 0, 1, "RX 7600, 8 GiB");
-    expect(11313, 0, 0, 0, "RX 7700 XT, 12 GiB");
+    expect(11313, 0, 0, 1, "RX 7700 XT, 12 GiB");
+    expect(11432, 0, 0, 1, "RTX 4070, 12 GiB (full went past its budget in play)");
     expect(15569, 0, 0, 0, "RX 6800 XT, 16 GiB");
     expect(31419, 0, 0, 0, "RTX 5090, 32 GiB");
-    // ---- between the old 8,192 MiB and the new 10,240: the cards of 10 GiB
+    // ---- between the old 8,192 MiB and the new 12,288: the cards of 10 and 12 GiB
     expect(9300, 0, 0, 1, "a 10 GiB card (0.10.1: full)");
     expect(8192, 0, 0, 1, "8,192 MiB, where full started in 0.10.1");
-    expect(10239, 0, 0, 1, "one MiB under the new start of full");
-    expect(10240, 0, 0, 0, "the new start of full");
+    expect(10240, 0, 0, 1, "10,240 MiB, where full started in 0.11.0");
+    expect(12287, 0, 0, 1, "one MiB under the new start of full");
+    expect(12288, 0, 0, 0, "the new start of full");
     // ---- low under 6,144 MiB, as before
     expect(6144, 0, 0, 1, "6,144 MiB");
     expect(6143, 0, 0, 2, "one MiB under it");
