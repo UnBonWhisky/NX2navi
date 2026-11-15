@@ -1277,6 +1277,10 @@
 # back and kept up to date from then on; the rest of that buffer stays on the video card. The game reads a few words
 # at the start of buffers of several MiB about twice a second. 0: the whole buffer comes back and everything near it
 # is copied back every frame for up to 32 seconds, as before (a tenth fewer frames a second in a village).
+# On 0.11.0 with an RTX 4070 at the default settings (2026-11-15): eight loads of a save in Hyrule Field at night and
+# a 13-minute route with it on lost the device in none; the GPU's merges of what shaders wrote went from 4.35 to 0.33 ms
+# a frame in the field, 57.5 instead of 50.8 fps there and 55.5 instead of 52.0 along the route. Still off by default
+# until the loss seen on the other card is explained; worth trying.
 # wb_lazy_chunk = 0
 # With wb_lazy: 1 (default): when the game's CPU code touches memory the video card wrote, the copy that brings it
 # back holds up only the threads that touch that memory; the game's other threads, the video card's bookkeeping and
