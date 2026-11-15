@@ -106,6 +106,8 @@ static struct {
                                        // cache_sizes_ask); 0: not asked yet (the memory report takes the loaded size)
     int fold;                          // the play file's content was merged into cache: saving cache removes the play file
     volatile uint64_t play_made;       // pipelines this run compiled into play
+    int base_gone;                     // pipeline-cache.bin's cache was given back in play: P.cache is P.play
+                                       // (base_release)
     int pv_last;                       // provokingVertexLast enabled: NVN's default is the last vertex
     VkShaderStageFlags sg32_stages;    // stages that accept requiredSubgroupSize = 32 (0: not available)
     int reconverge;                    // modules with subgroup ops get MaximallyReconvergesKHR (spirv_reconverge)
@@ -652,7 +654,9 @@ static VkResult pipe_create_in(int kind, void *ci, VkPipeline *pipe, VkPipelineC
     int shared = cache && !own_cache;
     if (cache && own_cache) cache = own_cache;
     uint64_t t0 = perf_mark_begin();   // NX2NAVI_TRACE=perf: the create on any thread, its wait for cache_rw included
-    if (shared) cache_build_enter();
+    // The caller passed P.cache as it read it; under cache_rw it is read again, since base_release may have put P.play
+    // in its place (and destroyed the old one) while this thread waited.
+    if (shared) cache_build_enter(), cache = P.cache;
     VkResult r;
     if (shared && P.play) {
         PipeCiHead *hd = ci;
@@ -708,6 +712,7 @@ VkResult vk_pipeline_create_foreign(VkDevice dev, int compute, uint32_t n, const
     }
     VkResult r = VK_SUCCESS;
     cache_build_enter();
+    cache = P.cache;   // base_release may have replaced it meanwhile (pipe_create_in)
     if (!P.play) {   // one cache: whether it held them is not known here; its save looks at the data's size
         r = foreign_one(dev, compute, cache, n, infos, alloc, out);
         if (r == VK_SUCCESS) __atomic_fetch_add(&FP.made, n, __ATOMIC_RELAXED), __atomic_fetch_add(&cache_merges, n, __ATOMIC_RELAXED);
@@ -9011,7 +9016,7 @@ static void cache_sizes_ask(void) {
     if (!plat_mutex_trylock(&save_lock)) return;
     if (plat_mutex_trylock(&cache_rw)) {
         for (int w = 0; w < 2; w++) {
-            VkPipelineCache cache = w ? P.play : P.cache;
+            VkPipelineCache cache = w ? P.play : P.base_gone ? VK_NULL_HANDLE : P.cache;
             size_t size = 0;
             if (cache && vkGetPipelineCacheData(P.device, cache, &size, NULL) == VK_SUCCESS && size)
                 __atomic_store_n(&P.held[w], (uint64_t)size, __ATOMIC_RELAXED);
@@ -9019,6 +9024,63 @@ static void cache_sizes_ask(void) {
         plat_mutex_unlock(&cache_rw);
     }
     plat_mutex_unlock(&save_lock);
+}
+
+// ---- giving pipeline-cache.bin's cache back in play (NX2NAVI_PIPELINE_CACHE_RELEASE, default 1)
+// The driver keeps the whole of pipeline-cache.bin in process memory for the run: 704 MB on a player's install, 1.58
+// GB in a test folder whose file kept the entries of earlier builds (the file only grows, cache_data_read). In play it
+// only answers creates of pipelines that were built before, and the boot builds every pipeline pipeline-keys.bin names,
+// so once that is done and no create has come for BASE_QUIET_MS the cache is given back: P.play, which receives every
+// pipeline this run compiles, takes its place for the rest of the run, so later creates ask the play cache and the
+// driver's own disk cache, and compile into the play file what neither has. Nothing written is lost:
+// pipeline-cache.bin is not written in play anyway (only its fold, P.fold, which this waits for), and what the base
+// cache gained in memory came from the driver's own disk cache, which keeps it. The next start reads both files as
+// before. Only with a play cache, no pipeline binaries, and mesh shaders on the GPU (emu_compute reads P.cache without
+// cache_rw, so a GPU that emulates mesh stages keeps it). A pipeline given back for video memory (pressure_release) or
+// one the boot did not prebuild may then compile where the base cache would have held it.
+#define BASE_QUIET_MS 60000
+static int lb_done(void) { return !__atomic_load_n(&LB.running, __ATOMIC_ACQUIRE); }
+
+static void base_release(uint64_t now) {
+    static int on = -1;
+    static uint64_t last_n, quiet_from;
+    if (on < 0) {
+        on = cfg_bool("NX2NAVI_PIPELINE_CACHE_RELEASE");
+        if (!on) rt_log("vk_pipeline: %s's cache stays in memory for the run (NX2NAVI_PIPELINE_CACHE_RELEASE=0)",
+                        P.cache_path);
+    }
+    if (!on || P.base_gone || !P.cache || !P.play || P.cache == P.play || P.fold || PB.on || prep_mode) return;
+    if (!vk_ctx()->has_mesh_shader || vk_ctx()->mesh_fallback) return;
+    VkPipeStats st;
+    vk_pipeline_stats(&st);
+    uint64_t n = st.graphics + st.compute + cache_merges + __atomic_load_n(&P.play_made, __ATOMIC_RELAXED);
+    plat_mutex_lock(&P.lock);
+    int busy = K.left || K.loading || !lb_done();
+    plat_mutex_unlock(&P.lock);
+    if (busy || n != last_n || !quiet_from) {
+        last_n = n, quiet_from = now;
+        return;
+    }
+    if (now - quiet_from < BASE_QUIET_MS) return;
+    if (!plat_mutex_trylock(&save_lock)) return;
+    if (!plat_mutex_trylock(&cache_rw)) {   // a build runs into it: the next tick tries again
+        plat_mutex_unlock(&save_lock);
+        return;
+    }
+    VkPipelineCache base = P.cache;
+    uint64_t held = __atomic_load_n(&P.held[0], __ATOMIC_RELAXED);
+    if (!held) held = P.cache_loaded;
+    P.cache = P.play;
+    P.base_gone = 1;
+    __atomic_store_n(&P.held[0], 0, __ATOMIC_RELAXED);
+    plat_mutex_unlock(&cache_rw);
+    vkDestroyPipelineCache(P.device, base, NULL);
+    plat_mutex_unlock(&save_lock);
+    float used = 0, total = 0, proc = 0;
+    plat_mem_info(&used, &total, &proc);
+    rt_log("vk_pipeline: %s's cache (%.1f MB) given back: the boot's builds are done and no pipeline was created for %d "
+           "s; from here on creates ask %s and the driver's own cache (NX2NAVI_PIPELINE_CACHE_RELEASE=0 keeps it); "
+           "process memory now %.0f MB", P.cache_path, held / 1048576.0, BASE_QUIET_MS / 1000, P.play_path, proc);
 }
 
 // The game never shuts the device down (boot.c and the window end the process), so the cache is saved while it
@@ -9033,6 +9095,7 @@ static void autosave_once(void) {
     release_drain();         // the pipelines given back earlier that the GPU is done with
     pressure_release(now);   // while video memory is short: the pipelines no draw used go
     if (now - last_sizes >= SIZES_EVERY_MS && (P.cache || P.play)) last_sizes = now, cache_sizes_ask();
+    base_release(now);
     if (now - last_keys >= 2000) {
         last_keys = now;
         if (*(volatile uint32_t *)&K.pend_n) keys_flush();
@@ -9107,7 +9170,7 @@ void vk_pipeline_shutdown(void) {
         layouts[i] = NULL;
     }
     plat_mutex_lock(&save_lock);   // not while the autosave thread copies it
-    if (P.cache) vkDestroyPipelineCache(P.device, P.cache, NULL);
+    if (P.cache && P.cache != P.play) vkDestroyPipelineCache(P.device, P.cache, NULL);
     if (P.play) vkDestroyPipelineCache(P.device, P.play, NULL);
     P.cache = P.play = VK_NULL_HANDLE;
     plat_mutex_unlock(&save_lock);

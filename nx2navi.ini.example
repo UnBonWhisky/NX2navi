@@ -297,6 +297,13 @@
 # pipeline_cache_play = 1
 # The size (MB) at which pipeline-cache-play.bin is folded into pipeline-cache.bin at a start.
 # pipeline_cache_play_mb = 64
+# 1 (default): once the start's pipeline builds are done and no pipeline was made for a minute, the graphics driver's
+# copy of pipeline-cache.bin is given back (it stays in memory for the whole run otherwise: as large as the file, often
+# 0.7 to 1.6 GB); new pipelines still go into pipeline-cache-play.bin, and the next start reads both files as before. A
+# pipeline the driver no longer has in its own disk cache then compiles in the background instead of coming from the
+# file. Needs pipeline_cache_play = 1. 0: the copy stays for the run. In a Hyrule Field run on an RTX 4070 it gave
+# back 1578 MB: commit 20.2 to 18.5 GB, working set 12.5 to 10.6 GB.
+# pipeline_cache_release = 1
 # 1: the pipelines FSR 3.1 makes for upscaling and frame generation are kept in the pipeline cache files, so a later
 # start does not compile them again. 0: FSR 3.1 creates them without those files, as the graphics driver alone keeps
 # them.
