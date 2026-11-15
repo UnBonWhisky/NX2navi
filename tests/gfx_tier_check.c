@@ -68,12 +68,12 @@ int main(void) {
     setting(NULL, -2), setting("", -2), setting("auto", -2), setting("off", -1);
     setting("minimum", GFX_TIER_MINIMUM), setting("low", GFX_TIER_LOW), setting("balanced", GFX_TIER_BALANCED);
     setting("high", GFX_TIER_HIGH), setting("ultra", GFX_TIER_ULTRA), setting("medium", -3);
-    // ---- the values: the 3D resolution, sharpness and the handheld profile of the reference table
+    // ---- the values: the 3D resolution and sharpness of the reference table; no tier sets the console mode
     row("SCENE_SHARE", (const char *const[]){"0.5", "0.75", "1", "1", "1"});
     row("DLSS", (const char *const[]){"performance", "quality", "dlaa", "dlaa", "dlaa"});
     row("SHARPNESS", (const char *const[]){"30", "30", "30", "40", "50"});
-    row("OPERATION_MODE", (const char *const[]){"handheld", "handheld", "docked", "docked", "docked"});
     row("TEXTURE_DETAIL", (const char *const[]){"low", "low", "reduced", GFX_TIER_HIGH_DETAIL, "full"});
+    if (value("OPERATION_MODE", 0)) fails++, printf("FAIL: a tier sets operation_mode (handheld draws a quarter of the frame black)\n");
     printf(fails ? "gfx_tier_check: %d failed\n" : "gfx_tier_check: ok\n", fails);
     return fails != 0;
 }

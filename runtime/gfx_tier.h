@@ -40,15 +40,16 @@ static inline int gfx_tier_setting(const char *v) {
 // of the game resolution without DLSS or FSR 3.1 (scene_share: 0.75 is the game's own most, 1 the menu's Native) and,
 // with one of them on, the mode nearest that share (dlss: performance renders half, quality two thirds, dlaa all); the
 // tier never turns either on or off. Sharpness is the FSR 1 sharpening of the scaling to the window (sharpness). The
-// minimum and low tiers report the console as handheld (operation_mode), as the game then draws for its handheld
-// screen. Texture detail: the levels texture_detail = auto gives such cards (vk_tex_detail.h); GFX_TIER_HIGH_DETAIL says
-// what the high tier gets and why.
+// console stays docked in every tier: with operation_mode = handheld the game draws its handheld picture (1920x1080)
+// into the top-left three quarters of the 2560x1440 frame and the rest stays black (runs t-4000 and t-6000,
+// 2026-11-15), so the handheld profile of the minimum and low tiers is left out until that is fixed. Texture detail:
+// the levels texture_detail = auto gives such cards (vk_tex_detail.h); GFX_TIER_HIGH_DETAIL says what the high tier
+// gets and why.
 #define GFX_TIER_HIGH_DETAIL "reduced"
 typedef struct { const char *key, *value[GFX_TIER_N]; } GfxTierRow;
 static const GfxTierRow gfx_tier_rows[] = {
     {"SCENE_SHARE", {"0.5", "0.75", "1", "1", "1"}},
     {"DLSS", {"performance", "quality", "dlaa", "dlaa", "dlaa"}},
     {"SHARPNESS", {"30", "30", "30", "40", "50"}},
-    {"OPERATION_MODE", {"handheld", "handheld", "docked", "docked", "docked"}},
     {"TEXTURE_DETAIL", {"low", "low", "reduced", GFX_TIER_HIGH_DETAIL, "full"}},
 };
