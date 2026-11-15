@@ -1,4 +1,4 @@
-﻿// Contains code Copyright (c) 2026 MacNativeGames contributors, Copyright (c) 2026 Peiikai (MIT; see
+// Contains code Copyright (c) 2026 MacNativeGames contributors, Copyright (c) 2026 Peiikai (MIT; see
 // THIRD_PARTY_NOTICES.md).
 // Guest address space and the memory SVCs: heap, module data permissions, stack moves,
 // QueryMemory, physical memory in the alias region, GetInfo memory ids, and the kernel-region allocator.
@@ -53,6 +53,13 @@ static uint64_t heap_size, alias_bytes;
 static int heap_lazy;               // NX2NAVI_HEAP_LAZY, Windows: the heap is committed page run by page run on first use
 static uint64_t heap_lazy_faults, heap_lazy_bytes;   // accesses that committed heap pages, and the bytes they committed
 static uint64_t heap_lazy_ns, heap_lazy_max_ns;      // time in those faults, lock wait included, since the last report
+// With the lazy heap: one bit per 64 KiB chunk of the heap whose pages are all committed (heap_lazy_commit_locked sets
+// it, a shrink of the heap clears it). The checks that guard host access to guest memory (mem_kernel_access, mem_thaw,
+// mem_copy_readable) asked the system for the pages' state under frz_lock on every call while any page could be
+// reserved: the replay's pointer and storage checks then took 66 ms a frame where they take 10 (Hyrule Field, RTX 4070,
+// 2026-11-15). A range whose chunks are all marked takes the paths it takes without the lazy heap.
+#define HEAP_CHUNK_SHIFT 16
+static uint64_t heap_ok[(12ull << 30 >> HEAP_CHUNK_SHIFT) / 64];
 static uint8_t *alias_pages;        // 1 per mapped 4 KiB page of the alias region
 typedef struct { uint64_t dst, src, size; } StackMap;
 static StackMap stack_maps[MAX_STACK_MAPS];
@@ -760,6 +767,7 @@ int mem_lazy_armed(uint64_t a, uint64_t n) {
 // into heap_lazy_fault, which waits for frz_lock: held here, by the same thread, so the copy never returned and every
 // later fault, thaw and freeze waited behind it. So a range that meets the heap is copied run by run as the system
 // reports its pages: the heap's reserved runs read zero, as they would once committed, without committing them.
+static int heap_range_committed(uint64_t a, uint64_t n);
 int mem_copy_readable(uint8_t *const *dst, const uint64_t (*src)[2], int n, uint8_t *ok) {
     int got = 0;
     plat_mutex_lock(&frz_lock);
@@ -768,7 +776,7 @@ int mem_copy_readable(uint8_t *const *dst, const uint64_t (*src)[2], int n, uint
         uint64_t a = src[i][0], len = src[i][1];
         ok[i] = 0;
         if (!len || a >= RT_ADDRESS_LIMIT || a + len > RT_ADDRESS_LIMIT) continue;
-        int lazy = heap_lazy && a < top && a + len > heap;   // reserved heap pages may lie in it
+        int lazy = heap_lazy && a < top && a + len > heap && !heap_range_committed(a, len);   // reserved heap pages may lie in it
         int quick = !lazy, can = 1;
         for (uint64_t r = a >> FRZ_SHIFT; quick && r <= (a + len - 1) >> FRZ_SHIFT; r++)
             quick = !__atomic_load_n(&lzr[r], __ATOMIC_RELAXED) && !__atomic_load_n(&prb[r], __ATOMIC_RELAXED);
@@ -1176,7 +1184,10 @@ static uint64_t heap_lazy_commit_locked(uint64_t a, uint64_t n) {
     uint64_t lo = a > L.heap.base ? a : L.heap.base, top = L.heap.base + __atomic_load_n(&heap_size, __ATOMIC_ACQUIRE);
     uint64_t end = a + n < a ? UINT64_MAX : a + n, hi = end < top ? end : top, got = 0;
     if (lo >= hi) return 0;
-    lo &= ~(PAGE - 1), hi = align_up(hi, PAGE);
+    // whole 64 KiB chunks, as a fault commits them: every chunk the range reaches can then be marked (heap_ok)
+    lo = L.heap.base + ((lo - L.heap.base) & ~((1ull << HEAP_CHUNK_SHIFT) - 1));
+    hi = L.heap.base + align_up(hi - L.heap.base, 1ull << HEAP_CHUNK_SHIFT);
+    if (hi > top) hi = align_up(top, PAGE);
     int thawed = 0;
     for (uint64_t x = lo, y; x < hi; x = y) {
         if (plat_mem_state(x, hi, &y) != PLAT_MEM_RESERVED) continue;
@@ -1187,12 +1198,28 @@ static uint64_t heap_lazy_commit_locked(uint64_t a, uint64_t n) {
         got += y - x;
     }
     heap_lazy_bytes += got;
+    // every page of [lo, hi) is committed now: the chunks wholly inside it are marked
+    for (uint64_t c = (lo - L.heap.base + ((1ull << HEAP_CHUNK_SHIFT) - 1)) >> HEAP_CHUNK_SHIFT;
+         ((c + 1) << HEAP_CHUNK_SHIFT) <= hi - L.heap.base; c++)
+        __atomic_fetch_or(&heap_ok[c >> 6], 1ull << (c & 63), __ATOMIC_RELEASE);
     return got;
+}
+
+// [a, a + n) holds no page the lazy heap may have left reserved: it lies outside the heap, or every 64 KiB chunk of it
+// is marked committed (heap_ok). No lock: a mark is set only once its pages are committed, and cleared by a shrink of
+// the heap, after which the game has no business in those pages.
+static int heap_range_committed(uint64_t a, uint64_t n) {
+    uint64_t base = L.heap.base, top = base + __atomic_load_n(&heap_size, __ATOMIC_ACQUIRE);
+    uint64_t lo = a > base ? a : base, end = a + n < a ? UINT64_MAX : a + n, hi = end < top ? end : top;
+    if (lo >= hi) return 1;
+    for (uint64_t c = (lo - base) >> HEAP_CHUNK_SHIFT, e = (hi - 1 - base) >> HEAP_CHUNK_SHIFT; c <= e; c++)
+        if (!(__atomic_load_n(&heap_ok[c >> 6], __ATOMIC_ACQUIRE) >> (c & 63) & 1)) return 0;
+    return 1;
 }
 
 // Commits the heap pages of [a, a + n) that the lazy heap left reserved; nothing when it is off.
 void mem_kernel_access(uint64_t a, uint64_t n) {
-    if (!heap_lazy || !n) return;
+    if (!heap_lazy || !n || heap_range_committed(a, n)) return;
     plat_mutex_lock(&frz_lock);
     heap_lazy_commit_locked(a, n);
     plat_mutex_unlock(&frz_lock);
@@ -1235,8 +1262,9 @@ static int heap_lazy_fault(uint64_t a) {
 void mem_thaw(uint64_t a, uint64_t n) {
     lazy_release_regions(a, n);   // the lazy write-back's fetches there, without frz_lock
     plat_mutex_lock(&frz_lock);   // also when nothing is frozen: the hold keeps a read's buffer writable
-    if (heap_lazy || !frz_async || !n || a >= RT_ADDRESS_LIMIT) {
-        if (heap_lazy) {
+    int lazy = heap_lazy && n && !heap_range_committed(a, n);   // reserved heap pages may lie in it
+    if (lazy || !frz_async || !n || a >= RT_ADDRESS_LIMIT) {
+        if (lazy) {
             thaw_wait_locked(a, n);   // it commits pages: a mapping change
             heap_lazy_commit_locked(a, n);   // the kernel's write would fail on a reserved page as well
         }
@@ -1640,7 +1668,11 @@ uint32_t mem_set_heap_size(uint64_t size, uint64_t *addr) {
     uint64_t was = heap_size;
     if (size > was && !heap_lazy) commit(L.heap.base + was, size - was, "heap");
     __atomic_store_n(&heap_size, size, __ATOMIC_RELEASE);   // before a shrink: no first-use commit past the new end
-    if (size < was) decommit(L.heap.base + size, was - size, "heap");   // reserved pages in the range are fine
+    if (size < was) {   // reserved pages in the range are fine; their chunks are no longer committed (heap_ok)
+        decommit(L.heap.base + size, was - size, "heap");
+        for (uint64_t c = size >> HEAP_CHUNK_SHIFT; c < (was >> HEAP_CHUNK_SHIFT); c++)
+            __atomic_fetch_and(&heap_ok[c >> 6], ~(1ull << (c & 63)), __ATOMIC_RELEASE);
+    }
     uint64_t moved = size > was ? size - was : was - size;
     __atomic_store_n(&map_gen, map_gen + 1, __ATOMIC_RELEASE);
     plat_mutex_unlock(&lock);
