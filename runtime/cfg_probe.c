@@ -642,7 +642,9 @@ int probe_cfg(void) {
         char name[96];
         snprintf(name, sizeof name, "NX2NAVI_%s", m->key);
         cfg_setenv(name, "");
-        CHECK(EQ(cfg_value(name), m->def), "cfg_value returns the table default");
+        // the default in effect: the table's, or a device profile's or graphics tier's above it (cfg.c), which the
+        // menu's reset returns to as well
+        CHECK(EQ(cfg_value(name), cfg_default(m->key)), "cfg_value returns the default in effect");
         int ok = 0;
         if (!m->values) ok = 1;
         else if (strstr(m->values, "..")) {
