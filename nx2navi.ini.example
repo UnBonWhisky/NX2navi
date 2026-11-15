@@ -110,6 +110,9 @@
 # With 1 a worker records each long run of draws while the submitting thread waits for it: no faster, it checks that
 # the pictures stay the same.
 # replay_workers = auto
+# How long (microseconds, 0 to 2000) a replay worker with nothing to record polls for the next batch before it sleeps
+# until it is woken. Default: 100.
+# replay_spin_us = 100
 # 1, the default, lets the game start on its next frame while the graphics card still runs the end of the last one: the
 # upscaler (FSR 4, FSR 3.1 or DLSS) and the interface drawn after it. The graphics card runs the same work, with the
 # copies of what it wrote for the game moved before that end, and the game's waits end once those copies and the

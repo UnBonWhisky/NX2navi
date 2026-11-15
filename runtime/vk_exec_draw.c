@@ -2704,7 +2704,14 @@ uint32_t vk_exec_draw_group_begin(VkExec *ex) {
     dummies_init();
     if (vk_ctx()->has_mesh_shader && !vk_ctx()->mesh_fallback) mesh_ring_make();   // the chunks' indirect mesh draws
     if (!__atomic_load_n(&LIM.ubo_max, __ATOMIC_ACQUIRE)) limits_init();
-    if (pool_on() && PL.cur_fence == ex->fence && !PL.sealed) {   // the set this submission took
+    // The set this submission took, brought up to date; and when it took none yet, it takes one here
+    // (NX2NAVI_POOL_GROUP_TAKE, default 1). Otherwise every chunk whose first draw binds the pools found no set of this
+    // submission and waited for its turn (pool_sync_draw), that is for every earlier chunk of the group to be done: the
+    // first group of such a submission was recorded one chunk after the other. Hyrule Field (run f5-base): 0.2 waits for
+    // an earlier chunk a submission, which took 0.5 ms of the chunks' time a submission, about 3.6 ms a frame.
+    static int early = -1;
+    if (early < 0) early = rt_knob("POOL_GROUP_TAKE", "1");
+    if (pool_on() && (PL.cur_fence == ex->fence ? !PL.sealed : early)) {
         int lk = vk_exec_shared();   // earlier groups may still record (NX2NAVI_REPLAY_PIPE)
         if (lk) plat_mutex_lock(&pool_mt);
         pool_sync(ex);

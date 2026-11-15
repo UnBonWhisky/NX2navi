@@ -2018,6 +2018,7 @@ static struct {
     int n;                              // workers; 0 off, -1 not read yet
     int pipe;                           // NX2NAVI_REPLAY_PIPE: the groups out at once at most, 0 none
     int small;                          // NX2NAVI_REPLAY_SMALL: the fewest draws of a group one worker takes whole
+    uint64_t idle_spin_ns;              // NX2NAVI_REPLAY_SPIN_US: how long a worker polls for the next chunk before it sleeps
     uint64_t small_groups, small_draws; // such groups and their draws since the last perf line
     void *help_dc;                      // the submitting thread's draw context for chunks it takes while it waits
     RwWorker *w[RW_MAX];
@@ -2038,6 +2039,8 @@ static struct {
 static void group_take(int pool);
 
 enum { SER_DRAW, SER_MESH, SER_DISPATCH, SER_OTHER };
+#define SER_SAMPLE 8                    // the ops outside groups are timed in one submission of these (walk)
+static int ser_timed;                   // this submission's are (vk_exec_record)
 static int ser_kind(uint32_t op) {
     switch (op) {
     case OP_DRAW: case OP_DRAW_IDX: case OP_DRAW_IDX_IND: return SER_DRAW;
@@ -2115,12 +2118,12 @@ static void rw_main(void *arg) {
             chunk_record(c, w->idx);
             continue;
         }
-        // spins about 100 us after a chunk (the next group of the frame is usually closer), then sleeps
+        // spins RW.spin_ns after a chunk (NX2NAVI_REPLAY_SPIN_US), then sleeps
         uint64_t t0 = kern_now_ns();
         for (unsigned i = 0; __atomic_load_n(&Q.take, __ATOMIC_SEQ_CST) >= __atomic_load_n(&Q.put, __ATOMIC_SEQ_CST);
              i++) {
             if (par_pending()) break;
-            if ((i & 63) || kern_now_ns() - t0 < 100000) {
+            if ((i & 63) || kern_now_ns() - t0 < RW.idle_spin_ns) {
                 plat_pause();
                 continue;
             }
@@ -2168,6 +2171,11 @@ static void rw_init(void) {
         rt_log("vk: WARNING: %d replay workers set on AMD's driver for RX 6000 and older, where a game with workers lost "
                "its device; NX2NAVI_REPLAY_WORKERS = auto or 0 avoids it", RW.n);
     }
+    // A worker with nothing to record polls this long for the next chunk, then sleeps until the next hand-out wakes it.
+    // The next group of a frame mostly comes 0.5 to 1.5 ms after the last one (Hyrule Field: the timeline of run m0),
+    // so most polls ran out unanswered.
+    int spin = cfg_int("NX2NAVI_REPLAY_SPIN_US");
+    RW.idle_spin_ns = (uint64_t)(spin < 0 ? 0 : spin > 2000 ? 2000 : spin) * 1000;
     for (int k = 0; k < RW.n; k++) {
         RwWorker *w = calloc(1, sizeof *w);
         if (!w) rt_fatal("vk: out of memory (replay worker)");
@@ -2283,9 +2291,11 @@ static const char *const ge_name[GE_N] = {"run end", "target change", "uniform u
 int vk_gpu_passes_capturing(void);   // vk_crumbs.c: NX2NAVI_GPU_PASSES is copying this frame's counts
 
 // The draws of the group that starts at h (it ends at *end, for the reason *why), reading at most GROUP_PEEK ops.
-static uint32_t group_peek(const VkExec *ex, const op_hdr *h, const op_hdr **end, int *why, uint32_t *end_op) {
+static uint32_t group_peek(const VkExec *ex, const op_hdr *h, const op_hdr **end, int *why, uint32_t *end_op,
+                           uint32_t *nops) {
     uint32_t draws = 0;
     *end_op = 0;
+    *nops = 0;
     int begun = 0;
     const p_set_rt *rt = &ex->rt;
     *why = GE_LIMIT;
@@ -2310,6 +2320,7 @@ static uint32_t group_peek(const VkExec *ex, const op_hdr *h, const op_hdr **end
         }
         if (h->op == OP_DRAW || h->op == OP_DRAW_IDX || h->op == OP_DRAW_IDX_IND || mesh) draws++, begun = 1;
         if (h->op == OP_CLEAR_COLOR || h->op == OP_CLEAR_DS) begun = 1;
+        ++*nops;
         h = nvn_op_next(h);
     }
     *end = h;
@@ -2487,14 +2498,27 @@ static void op_again(VkExec *ex, const op_hdr *h) {
     op_one(ex, h);
 }
 
+// How a group is cut into chunks (NX2NAVI_REPLAY_BALANCE, default 1): by its ops, each chunk ending at the first draw
+// past its share of them (at least BALANCE_MIN_DRAWS draws); 0: by its draws, an equal number each. The draws of a group
+// are not alike: some come with a dozen binds and state changes, others with none, and those ops are what the
+// recording spends its time on. Cut by draws, a group of 437 draws went out in chunks of 1,312 to 1,979 ops that took
+// 0.48 to 1.08 ms (Hyrule Field, run m0's timeline), and the submitting thread waited for the slowest chunk after its
+// own (0.2 ms a submission, 1.4 ms a frame).
+#define BALANCE_MIN_DRAWS 8
+static int rw_balance_ops(void) {
+    static int on = -1;
+    if (on < 0) on = rt_knob("REPLAY_BALANCE", "1");
+    return on;
+}
+
 // The submitting thread, at op h of the walk: when a group large enough to split starts here, it is recorded by the
 // workers and this thread, and the walk goes on with the op that ended it, which is returned; otherwise h (the walk
 // replays the group itself, without reading ahead again before its end).
 static const op_hdr *group_start(VkExec *ex, const op_hdr *h, int depth) {
     const op_hdr *end;
     int why;
-    uint32_t end_op;
-    uint32_t draws = group_peek(ex, h, &end, &why, &end_op);
+    uint32_t end_op, nops;
+    uint32_t draws = group_peek(ex, h, &end, &why, &end_op, &nops);
     if (why == GE_RUN && end_op < OP_COUNT_) RW.run_end[end_op] += draws;
     if (end == h) return h;   // an op the submitting thread replays itself
     RW.end_draws[why] += draws;
@@ -2527,8 +2551,8 @@ static const op_hdr *group_start(VkExec *ex, const op_hdr *h, int depth) {
     vk_gpu_gap_note(VK_GAP_GROUP, draws);
     g->upd = vk_exec_draw_group_begin(ex);
     // the front pass
-    uint32_t per = (draws + (uint32_t)n - 1) / (uint32_t)n, cd = 0;
-    int nc = 1, cut = 0;
+    uint32_t per = (draws + (uint32_t)n - 1) / (uint32_t)n, cd = 0, co = 0;
+    int nc = 1, cut = 0, by_ops = rw_balance_ops();
     g->ncond = 0;
     vk_exec_xfer_group((int)(g - GQ));
     Chunk *c = chunk_open(g, ex, h, 0);
@@ -2542,7 +2566,10 @@ static const op_hdr *group_start(VkExec *ex, const op_hdr *h, int depth) {
         switch (o->op) {
         case OP_DRAW: case OP_DRAW_IDX: case OP_DRAW_IDX_IND: case OP_DRAW_MESH: case OP_DRAW_MESH_IND:
             if (vk_exec_xfer_counting() && !ex->render_disabled) c->nslots++;   // at most one query each
-            if (++cd == per && nc < n) cut = 1;
+            ++cd;
+            if (nc < n && (by_ops ? cd >= BALANCE_MIN_DRAWS && (uint64_t)(co + 1) * (uint64_t)n >= (uint64_t)nc * nops
+                                  : cd == per))
+                cut = 1;
             break;
         case OP_CLEAR_COLOR: case OP_CLEAR_DS: break;   // recorded by the chunk
         case OP_REPORT_COUNTER: case OP_RESET_COUNTER: case OP_RENDER_ENABLE: case OP_RENDER_COND: {
@@ -2559,7 +2586,7 @@ static const op_hdr *group_start(VkExec *ex, const op_hdr *h, int depth) {
         }
         default: op_one(ex, o); break;   // state, binds, render targets
         }
-        c->nops++;
+        c->nops++, co++;
         o = nvn_op_next(o);
     }
     vk_exec_xfer_group(-1);   // the segments stay listed for the workers until the group is put in its part
@@ -2640,11 +2667,20 @@ static const op_hdr *walk(VkExec *ex, const op_hdr *h, int depth) {
         default:
             if (RW.n > 0) {   // the perf line's split of the replay outside groups
                 if (Q.drained < Q.out && !pipe_op(h->op)) RW.pd_op[h->op]++, group_drain(ex, PW_OP);
+                // Timed in one submission of SER_SAMPLE only, and the perf line scales it: two clock reads around
+                // each of the about 1,800 ops a submission replays here were 1.7% of the replaying thread's time in
+                // Hyrule Field (run p1-prof), with or without the perf trace.
                 int k = ser_kind(h->op);
-                uint64_t t = kern_now_ns();
-                op_one(ex, h);
-                if (vk_texture_deferred_take()) op_again(ex, h);
-                RW.ser_n[k]++, RW.ser_ns[k] += kern_now_ns() - t;
+                RW.ser_n[k]++;
+                if (ser_timed) {
+                    uint64_t t = kern_now_ns();
+                    op_one(ex, h);
+                    if (vk_texture_deferred_take()) op_again(ex, h);
+                    RW.ser_ns[k] += (kern_now_ns() - t) * SER_SAMPLE;
+                } else {
+                    op_one(ex, h);
+                    if (vk_texture_deferred_take()) op_again(ex, h);
+                }
             } else op_one(ex, h);
             break;
         }
@@ -2753,6 +2789,8 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
     ex->barrier_at = -1;
     ex->nfbl = 0;   // the previous command buffer ended with a full barrier: every image is in GENERAL
     vk_exec_frame.submits++;
+    static uint32_t ser_count;
+    ser_timed = ++ser_count % SER_SAMPLE == 0;
     __atomic_store_n(&vk_exec_submit_seq, vk_exec_submit_seq + 1, __ATOMIC_RELAXED);   // read without the lock too
     split_draws = part_start = 0;
     split_at = split_n < 0 ? 0 : split_n ? split_n : INT_MAX;   // 0 until maybe_split reads the settings

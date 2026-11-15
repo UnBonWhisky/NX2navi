@@ -254,18 +254,51 @@ static void capture_model_buffers(MotionOwnerSnapshot *out) {
     }
 }
 
+// One walk per presented frame (NX2NAVI_MOTION_CAPTURE_FRAME, default 1; 0 walks at every submission as before). Every
+// guest submission with commands takes a snapshot (vk_usnap.c), about seven a frame in Hyrule Field, and each walk
+// follows the player's actor, equipment, models and their shapes' buffers through hundreds of checked reads of guest
+// memory, each a system call (read_at: ReadProcessMemory). On the replaying thread before the first op of every
+// submission that was 6.6% of that thread's time standing in Hyrule Field (an RTX 4070, 2026-11-15, the profile of
+// run p1-prof), about 1.3 ms a frame. The later submissions of a frame get a copy of its first walk instead: the
+// player's models and their buffers are the same within a frame, the walk is taken again when the frame changes
+// (motion_owner_present) and when anything bumps O.serial (a model with a new lifetime, motion_owner_forget,
+// motion_owner_reset, motion_owner_forget_range), and the bindings observed meanwhile are reset to the snapshot as
+// the walk did.
+static MotionOwnerSnapshot *cap_cache;   // owner_lock: the last walk's snapshot, sorted
+static uint64_t cap_frame, cap_serial;   // owner_lock: O.producer_frame and O.serial after it
+static int cap_have, cap_on = -1;        // owner_lock
+
 void motion_owner_capture(MotionOwnerSnapshot *out) {
-    memset(out, 0, sizeof *out);
+    out->count = 0;
     if (!motion_owner_enabled()) return;
     plat_mutex_lock(&owner_lock);
+    if (cap_on < 0) {
+        cap_on = rt_knob("MOTION_CAPTURE_FRAME", "1") && (cap_cache = malloc(sizeof *cap_cache)) != NULL;
+        if (!cap_on) rt_log("motion ownership: the player's models are walked at every submission "
+                            "(NX2NAVI_MOTION_CAPTURE_FRAME=0)");
+    }
+    if (cap_on && cap_have && cap_frame == O.producer_frame && cap_serial == O.serial) {
+        ++O.captures;
+        out->count = cap_cache->count;
+        memcpy(out->bindings, cap_cache->bindings, out->count * sizeof *out->bindings);
+        O.nbindings = out->count;
+        memcpy(O.bindings, out->bindings, out->count * sizeof *O.bindings);
+        plat_mutex_unlock(&owner_lock);
+        return;
+    }
     refresh(O.producer_frame, 1);
     ++O.captures;
     capture_model_buffers(out);
     O.nbindings=out->count;
     memcpy(O.bindings,out->bindings,out->count*sizeof *O.bindings);
     if(O.captures%43200==0) rt_log("motion direct: %u shape bindings from %u models",out->count,O.count);
-    plat_mutex_unlock(&owner_lock);
     qsort(out->bindings, out->count, sizeof *out->bindings, binding_address_order);
+    if (cap_on) {
+        cap_cache->count = out->count;
+        memcpy(cap_cache->bindings, out->bindings, out->count * sizeof *out->bindings);
+        cap_frame = O.producer_frame, cap_serial = O.serial, cap_have = 1;
+    }
+    plat_mutex_unlock(&owner_lock);
 }
 
 void motion_owner_present(void) {
