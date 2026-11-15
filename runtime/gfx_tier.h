@@ -45,6 +45,10 @@ static inline int gfx_tier_setting(const char *v) {
 // 2026-11-15), so the handheld profile of the minimum and low tiers is left out until that is fixed. Texture detail:
 // the levels texture_detail = auto gives such cards (vk_tex_detail.h); GFX_TIER_HIGH_DETAIL says what the high tier
 // gets and why.
+// The high tier keeps reduced texture detail. Full went past a 12 GB card's budget on the 13-minute route (Hyrule Field,
+// Kakariko, the Deku Tree, the Market, Kokiri Forest) with the high tier's other values, on an RTX 4070 (2026-11-15,
+// runs hr-full and hr-red): full peaked at 11,142 MiB in use against a 10,199 MiB budget, 338 frames over 50 ms and 23
+// over 100, 44.2 fps; reduced peaked at 9,145 MiB of 11,391, 55 and 16, 48.4 fps.
 #define GFX_TIER_HIGH_DETAIL "reduced"
 typedef struct { const char *key, *value[GFX_TIER_N]; } GfxTierRow;
 static const GfxTierRow gfx_tier_rows[] = {

@@ -698,7 +698,8 @@
 #            texture_detail = low
 #   low      6 GB: scene_share 0.75, dlss = quality, sharpness 30, texture_detail = low
 #   balanced 8 GB: scene_share 1 (Native), dlss = dlaa, sharpness 30, texture_detail = reduced
-#   high     10 and 12 GB: scene_share 1, dlss = dlaa, sharpness 40, texture_detail = reduced
+#   high     10 and 12 GB: scene_share 1, dlss = dlaa, sharpness 40, texture_detail = reduced (full went past an RTX
+#            4070's budget on a 13-minute route: 11,142 MiB in use of 10,199, 338 frames over 50 ms against 55)
 #   ultra    16 GB and more: scene_share 1, dlss = dlaa, sharpness 50, texture_detail = full
 # A tier only gives defaults: every one of those keys you set yourself here (or in the menu) wins over it, and a
 # key reset in the menu goes back to the tier's value. The dlss line is the mode used when DLSS or FSR 3.1 is on; the
